@@ -2,3 +2,7 @@ vmcache
 load_injector
 *~
 *.d
+
+runner
+vmcache.o
+libvmcache.a

@@ -35,6 +35,7 @@
 __thread uint16_t workerThreadId = 0;
 __thread int32_t tpcchistorycounter = 0;
 #include "tpcc/TPCCWorkload.hpp"
+#include "vmcache.hpp"
 
 using namespace std;
 
@@ -634,13 +635,6 @@ struct GuardS {
       }
    }
 };
-#endif //LINUX
-u64 envOr(const char* env, u64 value) {
-   if (getenv(env))
-      return atof(getenv(env));
-   return value;
-}
-#ifdef LINUX
 BufferManager::BufferManager() : virtSize(envOr("VIRTGB", 16)*gb), physSize(envOr("PHYSGB", 4)*gb), virtCount(virtSize / pageSize), physCount(physSize / pageSize), residentSet(physCount) {
    assert(virtSize>=physSize);
    const char* path = getenv("BLOCK") ? getenv("BLOCK") : "/tmp/bm";
@@ -1894,7 +1888,43 @@ void parallel_for(uint64_t begin, uint64_t end, uint64_t nthreads, Fn fn) {
 
 __thread u64 loadCount = 0;
 
-int main(int argc, char** argv) {
+unsigned nthreads{1};
+u64 n{10};
+u64 runForSec{30};
+bool isRndread{0};
+
+u64 statDiff = 1e8;
+atomic<u64> txProgress(0);
+atomic<bool> keepRunning(true);
+#ifdef LINUX
+   auto systemName = bm.useExmap ? "exmap" : "linux";
+#else
+   auto systemName = "osv";
+#endif
+
+void statFn() {
+   cout << "ts,tx,rmb,wmb,pagesStolen,system,threads,datasize,workload,batch" << endl;
+      u64 cnt = 0;
+      for (uint64_t i=0; i<runForSec; i++) {
+         sleep(1);
+         float rmb = (bm.readCount.exchange(0)*pageSize)/(1024.0*1024);
+         float wmb = (bm.writeCount.exchange(0)*pageSize)/(1024.0*1024);
+         u64 prog = txProgress.exchange(0);
+	 u64 nbPagesStolen = 0;//pagesStolen.exchange(0);
+         //cout << cnt++ << "," << prog << "," << rmb << "," << wmb << "," << nbPagesStolen << "," << systemName << "," << nthreads << "," << n << "," << (isRndread?"rndread":"tpcc") << "," << bm.batch << endl;
+         cout << cnt++ << "," << prog << "," << rmb << "," << wmb << "," << nbPagesStolen << "," << systemName << "," << nthreads << "," << n << "," << (isRndread?"rndread":"tpcc") << "," << bm.batch << endl;
+      }
+      keepRunning = false;
+}
+
+void configure(unsigned _nthreads, u64 _n, u64 _runForSec, bool _isRndread){
+    nthreads = _nthreads;
+    n = _n;
+    runForSec = _runForSec;
+    isRndread = _isRndread;
+}
+
+int setup() {
 	/*cout << "BLBL" << std::endl;
 	double x=42;
 	//auto start = osv::clock::uptime::now();
@@ -1921,34 +1951,6 @@ int main(int argc, char** argv) {
       }
    }
 #endif
-   unsigned nthreads = envOr("THREADS", 1);
-   u64 n = envOr("DATASIZE", 10);
-   u64 runForSec = envOr("RUNFOR", 30);
-   bool isRndread = envOr("RNDREAD", 0);
-
-   u64 statDiff = 1e8;
-   atomic<u64> txProgress(0);
-   atomic<bool> keepRunning(true);
-#ifdef LINUX
-   auto systemName = bm.useExmap ? "exmap" : "linux";
-#else
-   auto systemName = "osv";
-#endif
-
-   auto statFn = [&]() {
-      cout << "ts,tx,rmb,wmb,pagesStolen,system,threads,datasize,workload,batch" << endl;
-      u64 cnt = 0;
-      for (uint64_t i=0; i<runForSec; i++) {
-         sleep(1);
-         float rmb = (bm.readCount.exchange(0)*pageSize)/(1024.0*1024);
-         float wmb = (bm.writeCount.exchange(0)*pageSize)/(1024.0*1024);
-         u64 prog = txProgress.exchange(0);
-	 u64 nbPagesStolen = 0;//pagesStolen.exchange(0);
-         //cout << cnt++ << "," << prog << "," << rmb << "," << wmb << "," << nbPagesStolen << "," << systemName << "," << nthreads << "," << n << "," << (isRndread?"rndread":"tpcc") << "," << bm.batch << endl;
-         cout << cnt++ << "," << prog << "," << rmb << "," << wmb << "," << nbPagesStolen << "," << systemName << "," << nthreads << "," << n << "," << (isRndread?"rndread":"tpcc") << "," << bm.batch << endl;
-      }
-      keepRunning = false;
-   };
 
    if (isRndread) {
       BTree bt;
@@ -2012,7 +2014,10 @@ int main(int argc, char** argv) {
       statThread.join();
       return 0;
    }
+   return 0;
+}
 
+void tpcc() {
    // TPC-C
    Integer warehouseCount = n;
 
@@ -2063,7 +2068,6 @@ int main(int argc, char** argv) {
    #endif //LINUX
    //cout << "Total time for the insertion : " << chrono::duration_cast<chrono::seconds>(end-start).count() << " s" << endl;
    //print_aggregate_avg();
-   //return 0;
    bm.readCount = 0;
    bm.writeCount = 0;
    thread statThread(statFn);
@@ -2093,6 +2097,4 @@ int main(int argc, char** argv) {
    statThread.join();
    cerr << "space: " << (bm.allocCount.load()*pageSize)/(float)bm.gb << " GB " << endl;
    print_aggregate_avg();
-
-   return 0;
 }
