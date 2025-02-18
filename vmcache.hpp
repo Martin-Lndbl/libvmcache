@@ -9,6 +9,17 @@ inline uint64_t envOr(const char* env, uint64_t value) {
     return value;
 }
 
-void configure(unsigned nthreads, uint64_t n, uint64_t runForSec, bool isRndread);
+namespace vmcache {
+
+void configure(unsigned nthreads, uint64_t n, uint64_t runForSec);
+
+int rndread();
+
+namespace tpcc {
+
 int setup();
-void tpcc();
+void run();
+
+}
+
+} // namespace vmcach3

@@ -1888,6 +1888,8 @@ void parallel_for(uint64_t begin, uint64_t end, uint64_t nthreads, Fn fn) {
 
 __thread u64 loadCount = 0;
 
+namespace vmcache {
+
 unsigned nthreads{1};
 u64 n{10};
 u64 runForSec{30};
@@ -1917,26 +1919,11 @@ void statFn() {
       keepRunning = false;
 }
 
-void configure(unsigned _nthreads, u64 _n, u64 _runForSec, bool _isRndread){
+void configure(unsigned _nthreads, u64 _n, u64 _runForSec) {
     nthreads = _nthreads;
     n = _n;
     runForSec = _runForSec;
-    isRndread = _isRndread;
-}
 
-int setup() {
-	/*cout << "BLBL" << std::endl;
-	double x=42;
-	//auto start = osv::clock::uptime::now();
-    	//auto start = chrono::high_resolution_clock::now();
-	for(int i=0; i<10000000; i++){
-		x=cos(x) + chrono::duration_cast<chrono::milliseconds>(osv::clock::uptime::now()-start).count();
-	}
-	auto elapsed = osv::clock::uptime::now() - start;
-	//auto elapsed = chrono::high_resolution_clock::now() - start;
-	cout << "Total time for the insertion : " << chrono::duration_cast<chrono::milliseconds>(elapsed).count() << " s" << x << endl;
-	return 0;
-*/
 #ifdef OSV
    cout << "ACHTUNG : maxWorkerThreads is " << maxWorkerThreads << ", maxQueues is " << maxQueues << endl;
    #endif //OSV
@@ -1952,7 +1939,10 @@ int setup() {
    }
 #endif
 
-   if (isRndread) {
+}
+
+int rndread() {
+      isRndread = true;
       BTree bt;
       bt.splitOrdered = false;
 
@@ -1990,7 +1980,7 @@ int setup() {
 
             array<u8, 120> payload; 
             bool succ = bt.lookup({k1, sizeof(u64)}, [&](span<u8> p) {
-		memcpy(payload.data(), p.data(), p.size());
+               memcpy(payload.data(), p.data(), p.size());
 #ifdef OSV
             }, workerThreadId);
 #endif
@@ -2012,28 +2002,33 @@ int setup() {
       });
 
       statThread.join();
+      isRndread = false;
       return 0;
-   }
-   return 0;
 }
 
-void tpcc() {
+namespace tpcc {
+
+Integer warehouseCount{0};
+
+vmcacheAdapter<warehouse_t> warehouse;
+vmcacheAdapter<district_t> district;
+vmcacheAdapter<customer_t> customer;
+vmcacheAdapter<customer_wdl_t> customerwdl;
+vmcacheAdapter<history_t> history;
+vmcacheAdapter<neworder_t> neworder;
+vmcacheAdapter<order_t> order;
+vmcacheAdapter<order_wdc_t> order_wdc;
+vmcacheAdapter<orderline_t> orderline;
+vmcacheAdapter<item_t> item;
+vmcacheAdapter<stock_t> stock;
+
+std::optional<TPCCWorkload<vmcacheAdapter>> opt_tpcc;
+
+int setup() {
    // TPC-C
-   Integer warehouseCount = n;
-
-   vmcacheAdapter<warehouse_t> warehouse;
-   vmcacheAdapter<district_t> district;
-   vmcacheAdapter<customer_t> customer;
-   vmcacheAdapter<customer_wdl_t> customerwdl;
-   vmcacheAdapter<history_t> history;
-   vmcacheAdapter<neworder_t> neworder;
-   vmcacheAdapter<order_t> order;
-   vmcacheAdapter<order_wdc_t> order_wdc;
-   vmcacheAdapter<orderline_t> orderline;
-   vmcacheAdapter<item_t> item;
-   vmcacheAdapter<stock_t> stock;
-
-   TPCCWorkload<vmcacheAdapter> tpcc(warehouse, district, customer, customerwdl, history, neworder, order, order_wdc, orderline, item, stock, true, warehouseCount, true);
+   warehouseCount = n;
+   opt_tpcc.emplace(warehouse, district, customer, customerwdl, history, neworder, order, order_wdc, orderline, item, stock, true, warehouseCount, true);
+   auto& tpcc = opt_tpcc.value();
    #ifdef OSV
    //prof::config config{std::chrono::nanoseconds(1000000)};
    //prof::start_sampler(config);
@@ -2068,6 +2063,11 @@ void tpcc() {
    #endif //LINUX
    //cout << "Total time for the insertion : " << chrono::duration_cast<chrono::seconds>(end-start).count() << " s" << endl;
    //print_aggregate_avg();
+   return 0;
+}
+
+void run() {
+   auto& tpcc = opt_tpcc.value();
    bm.readCount = 0;
    bm.writeCount = 0;
    thread statThread(statFn);
@@ -2098,3 +2098,7 @@ void tpcc() {
    cerr << "space: " << (bm.allocCount.load()*pageSize)/(float)bm.gb << " GB " << endl;
    print_aggregate_avg();
 }
+
+} //namespace tpcc
+
+} // namespace vmcache
